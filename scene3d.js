@@ -7,10 +7,15 @@
  * MIT License
  */
 
+// Physics works in metres, the scene in centimetres
+const SCENE_SCALE = 100;
+
 class GranularScene3D {
     constructor(canvasContainer, physicsEngine) {
         this.container = canvasContainer;
         this.physics = physicsEngine;
+        this.view = 'iso';
+        this.onStrikerLaunch = null;     // callback(speed) after a drag release
 
         this.scene = null;
         this.camera = null;
@@ -33,6 +38,7 @@ class GranularScene3D {
         this.initThree();
         this.buildEnvironment();
         this.syncWithPhysics();
+        this.setView('iso');
         this.setupEventListeners();
     }
 
@@ -233,7 +239,8 @@ class GranularScene3D {
         // Build Striker Mesh
         const striker = this.physics.striker;
         const strikerGeo = sphereGeoTemplate.clone();
-        strikerGeo.scale(striker.r, striker.r, striker.r);
+        const sr = striker.r * SCENE_SCALE;
+        strikerGeo.scale(sr, sr, sr);
 
         const strikerMat = new THREE.MeshStandardMaterial({
             color: 0x38bdf8,           // Cyan tinted hardened impactor
@@ -251,7 +258,8 @@ class GranularScene3D {
         for (let i = 0; i < this.physics.beads.length; i++) {
             const b = this.physics.beads[i];
             const geo = sphereGeoTemplate.clone();
-            geo.scale(b.r, b.r, b.r);
+            const br = b.r * SCENE_SCALE;
+            geo.scale(br, br, br);
 
             let baseColor = 0x94a3b8;
             let metalness = 0.88;
@@ -265,7 +273,7 @@ class GranularScene3D {
                 baseColor = 0xe2e8f0;
                 metalness = 0.70;
                 roughness = 0.30;
-            } else if (b.material === 'polymer') {
+            } else if (b.material === 'ptfe') {
                 baseColor = 0xf43f5e;
                 metalness = 0.05;
                 roughness = 0.55;
@@ -287,11 +295,38 @@ class GranularScene3D {
             this.beadMeshes.push(mesh);
         }
 
-        // Position wall
+        // Position wall: front face of the contact pad (0.56 left of the group origin) touches the last bead
         if (this.wallMesh) {
             this.wallMesh.visible = this.physics.wall.enabled;
-            this.wallMesh.position.set(this.physics.wall.x + 0.3, 0.4, 0);
+            this.wallMesh.position.set(this.physics.wall.x * SCENE_SCALE + 0.56, 0.4, 0);
         }
+    }
+
+    /**
+     * Camera presets framed on the current chain (striker pull-back range to wall)
+     */
+    setView(view) {
+        this.view = view;
+        const p = this.physics;
+        const last = p.beads[p.beads.length - 1];
+        const xMin = (p.striker.x - p.striker.r) * SCENE_SCALE - 4;
+        const xMax = p.wall.enabled ? p.wall.x * SCENE_SCALE + 4 : (last.x + last.r) * SCENE_SCALE + 4;
+        const cx = (xMin + xMax) / 2;
+        const halfFov = THREE.MathUtils.degToRad(this.camera.fov / 2);
+        const hHalfFov = Math.atan(Math.tan(halfFov) * this.camera.aspect);
+        const dist = (xMax - xMin) / 2 / Math.tan(hHalfFov) * 1.05;
+
+        if (view === 'front') {
+            this.camera.position.set(cx, 1.2, dist);
+            this.controls.target.set(cx, 0.8, 0);
+        } else if (view === 'top') {
+            this.camera.position.set(cx, dist, 0.1);
+            this.controls.target.set(cx, 0, 0);
+        } else {
+            this.camera.position.set(cx, dist * 0.32, dist * 0.95);
+            this.controls.target.set(cx, 0, 0);
+        }
+        this.controls.update();
     }
 
     /**
@@ -311,6 +346,7 @@ class GranularScene3D {
             if (intersects.length > 0) {
                 this.isDraggingStriker = true;
                 this.controls.enabled = false; // Disable orbit rotate while dragging ball
+                this.physics.reset();          // Chain back to rest before a new shot
 
                 const intersectPoint = new THREE.Vector3();
                 this.raycaster.ray.intersectPlane(this.dragPlane, intersectPoint);
@@ -338,13 +374,11 @@ class GranularScene3D {
             this.raycaster.setFromCamera(this.mouse, this.camera);
             const intersectPoint = new THREE.Vector3();
             if (this.raycaster.ray.intersectPlane(this.dragPlane, intersectPoint)) {
-                let targetX = intersectPoint.x + this.dragOffset.x;
-                // Limit drag: cannot penetrate into bead 0, max pullback -14
-                const minAllowedX = -14.0;
-                const maxAllowedX = this.physics.beads[0].x - this.physics.beads[0].r - this.physics.striker.r - 0.05;
-
-                targetX = Math.max(minAllowedX, Math.min(maxAllowedX, targetX));
-                this.physics.striker.x = targetX;
+                // Scene centimetres -> physics metres; pull back at most 10 cm, never into bead 0
+                const first = this.physics.beads[0];
+                const contactX = first.x - first.r - this.physics.striker.r;
+                const targetX = (intersectPoint.x + this.dragOffset.x) / SCENE_SCALE;
+                this.physics.striker.x = Math.max(contactX - 0.10, Math.min(contactX - 0.0005, targetX));
                 this.physics.striker.v = 0;
                 this.physics.striker.a = 0;
             }
@@ -356,12 +390,13 @@ class GranularScene3D {
                 this.controls.enabled = true;
                 dom.style.cursor = 'default';
 
-                // Release striker: impart velocity proportional to pullback distance
-                const neutralX = this.physics.beads[0].x - this.physics.beads[0].r - this.physics.striker.r - 0.1;
-                const pullDistance = neutralX - this.physics.striker.x;
-                if (pullDistance > 0.2) {
-                    const launchSpeed = Math.min(12, Math.sqrt(2 * 1.8 * pullDistance * 9.81));
-                    this.physics.striker.v = launchSpeed;
+                // Release striker: 1 cm pull-back = 1 m/s, 1 ... 10 m/s like the slider
+                const first = this.physics.beads[0];
+                const pullCm = (first.x - first.r - this.physics.striker.r - this.physics.striker.x) * SCENE_SCALE;
+                if (pullCm > 0.2) {
+                    const launchSpeed = Math.round(Math.min(10, Math.max(1, pullCm)) * 5) / 5;
+                    this.physics.launchFrom(this.physics.striker.x, launchSpeed);
+                    if (this.onStrikerLaunch) this.onStrikerLaunch(launchSpeed);
                 }
             }
         };
@@ -377,6 +412,7 @@ class GranularScene3D {
             this.camera.aspect = w / h;
             this.camera.updateProjectionMatrix();
             this.renderer.setSize(w, h);
+            this.setView(this.view);
         });
     }
 
@@ -388,7 +424,7 @@ class GranularScene3D {
 
         // 1. Update Striker Mesh
         const s = this.physics.striker;
-        this.strikerMesh.position.set(s.x, s.r, 0);
+        this.strikerMesh.position.set(s.x * SCENE_SCALE, s.r * SCENE_SCALE, 0);
 
         // Rotate striker around Z axis as it rolls along rail
         this.strikerMesh.rotation.z = -s.x / s.r;
@@ -412,7 +448,7 @@ class GranularScene3D {
             const b = this.physics.beads[i];
             const mesh = this.beadMeshes[i];
 
-            mesh.position.set(b.x, b.r, 0);
+            mesh.position.set(b.x * SCENE_SCALE, b.r * SCENE_SCALE, 0);
             mesh.rotation.z = -b.x / b.r;
 
             // Apply Dynamic Hertzian Stress Glow
@@ -426,7 +462,7 @@ class GranularScene3D {
                 );
                 if (glow > maxStress) {
                     maxStress = glow;
-                    stressFocusX = b.x;
+                    stressFocusX = b.x * SCENE_SCALE;
                 }
             } else {
                 mesh.material.emissive.set(0x000000);
@@ -443,7 +479,7 @@ class GranularScene3D {
 
         // 3. Sensor Wall pulse
         if (this.wallMesh) {
-            const wallForceNorm = Math.min(1.0, this.physics.wall.force / 300);
+            const wallForceNorm = Math.min(1.0, this.physics.wall.force / this.physics.metrics.referenceForce);
             const sensor = this.wallMesh.children[1];
             if (sensor) {
                 if (wallForceNorm > 0.05) {

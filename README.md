@@ -1,17 +1,16 @@
 <div align="center">
 
 # 🧱 Granular Metamaterial Shock Lab
-### Interactive 3D Simulation of Nonlinear Hertzian Solitons, Tapered Granular Chains & Acoustic Diodes
+### Interactive 3D Simulation of Solitary Waves and Shock Transmission in Hertzian Sphere Chains
 
 [![GitHub Pages](https://img.shields.io/badge/Live_Demo-GitHub_Pages-38bdf8?style=for-the-badge&logo=github)](https://xallace.github.io/metamaterial-shock-lab/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge)](LICENSE)
 [![Platform: WebGL](https://img.shields.io/badge/Platform-Three.js_r128_WebGL-6366f1?style=for-the-badge)](https://threejs.org)
-[![Acoustics & Solids](https://img.shields.io/badge/Mechanics-Hertzian_Contact_Theory-f59e0b?style=for-the-badge)](#astronomical-formulations)
-[![Zero Build Steps](https://img.shields.io/badge/Dependencies-Zero_Vanilla_ES6-10b981?style=for-the-badge)](https://developer.mozilla.org)
+[![Hertzian Contact](https://img.shields.io/badge/Mechanics-Hertzian_Contact_Theory-f59e0b?style=for-the-badge)](#mathematical-formulations)
 
-*A high-fidelity mechanical engineering laboratory modeling discrete particle lattices, sonic vacuum dynamics, and shock mitigation structures.*
+*A 1D chain of elastic spheres in SI units, checked against the Hertz impact solution and Nesterenko's solitary wave.*
 
-[**🚀 Launch Live 3D Lab**](https://xallace.github.io/metamaterial-shock-lab/) • [**📐 Mathematical Formulations**](#mathematical-formulations) • [**🧪 Chain Presets**](#chain-presets) • [**🛠️ FEA & LS-DYNA Relevance**](#fea--ls-dyna-relevance)
+[**🚀 Launch Live 3D Lab**](https://xallace.github.io/metamaterial-shock-lab/) • [**📐 Mathematical Formulations**](#mathematical-formulations) • [**🧪 Chain Presets**](#chain-presets) • [**✅ Verification**](#verification)
 
 </div>
 
@@ -19,97 +18,97 @@
 
 ## 🌟 Overview
 
-Granular metamaterials (also known as **granular crystals**) consist of ordered arrays of elastic particles interacting through non-linear Hertzian contact. 
+Granular crystals are ordered arrays of elastic particles that interact through nonlinear Hertzian contact.
 
-Because spheres cannot sustain tensile loads (they separate under tension with $F = 0$), uncompressed chains exhibit a vanishing linear sound speed ($c_0 = 0$). This state is famously known in continuum and nonlinear physics as the **"Sonic Vacuum"** (V. F. Nesterenko, 1983).
+Spheres cannot carry tension (they separate, $F = 0$), so a chain of touching spheres without precompression has a linear sound speed of zero. Nesterenko called this state the **"sonic vacuum"**.
 
-When struck by an impactor, the lattice does not support conventional dispersive acoustic waves. Instead, mechanical energy organizes into **Highly Nonlinear Solitary Waves (HNSWs)**—compact, stable solitary pulses whose width is independent of amplitude and spans only $\sim 5$ particle diameters.
+An impact on such a chain does not produce ordinary acoustic waves. It forms a **solitary wave**, a compact pulse about five sphere diameters wide that travels without decay.
 
-This laboratory provides an interactive 3D WebGL testbench to simulate:
-1. Pure **Nesterenko Soliton propagation** in monodisperse lattices.
-2. **Shock mitigation & kinetic energy trapping** in tapered chains ($> 70\%$ peak force attenuation).
-3. **Acoustic Diode rectification** (unidirectional wave transmission).
-4. **Phononic bandgaps** in diatomic lattices.
+The lab simulates a striker sphere hitting six chain types (see presets) and measures the peak contact force at the input and at a rigid wall behind the chain.
 
 ---
 
 ## 📐 Mathematical Formulations
 
-### 1. Discrete Hertzian Contact Mechanics
-For two spherical particles $i$ and $i+1$ of radii $R_i, R_{i+1}$, Young's moduli $E_i, E_{i+1}$, and Poisson's ratios $\nu_i, \nu_{i+1}$, the contact force $F$ depends on mutual compressive indentation $\delta_{i, i+1}$:
+### 1. Hertzian Contact
+For two spheres with radii $R_i, R_{i+1}$, Young's moduli $E_i, E_{i+1}$ and Poisson's ratios $\nu_i, \nu_{i+1}$:
 
-$$\delta_{i, i+1} = \max\left(0, (R_i + R_{i+1}) - (x_{i+1} - x_i)\right)$$
+$$\delta_{i, i+1} = \max\left(0, (R_i + R_{i+1}) - (x_{i+1} - x_i)\right), \qquad F_{i, i+1} = A_{i, i+1} \cdot \delta_{i, i+1}^{3/2}$$
 
-$$F_{i, i+1} = A_{i, i+1} \cdot \delta_{i, i+1}^{3/2}$$
+$$A = \frac{4}{3} E^* \sqrt{R^*}, \qquad \frac{1}{R^*} = \frac{1}{R_i} + \frac{1}{R_{i+1}}, \qquad \frac{1}{E^*} = \frac{1 - \nu_i^2}{E_i} + \frac{1 - \nu_{i+1}^2}{E_{i+1}}$$
 
-The contact stiffness coefficient $A$ is given by:
+The wall is a rigid flat steel plate (sphere on flat: $R^* = R$).
 
-$$A_{i, i+1} = \frac{4}{3} E^* \sqrt{R^*}$$
+### 2. Equations of Motion
+$$m_i \ddot{x}_i = F_{i-1, i} - F_{i, i+1}$$
 
-Where the effective radius $R^*$ and effective modulus $E^*$ are:
+The model has no damping, so the total energy $\sum \tfrac{1}{2} m v^2 + \sum \tfrac{2}{5} A \delta^{5/2}$ stays constant and serves as a check of the integrator (velocity Verlet, step ≤ 0.1 µs).
 
-$$\frac{1}{R^*} = \frac{1}{R_i} + \frac{1}{R_{i+1}}, \quad \frac{1}{E^*} = \frac{1 - \nu_i^2}{E_i} + \frac{1 - \nu_{i+1}^2}{E_{i+1}}$$
+### 3. Solitary Wave Speed (Nesterenko, long-wave approximation)
+$$V_s = \frac{2}{\sqrt{5}}\, c\, \xi_m^{1/4}, \qquad c^2 = \frac{2E}{\pi \rho (1 - \nu^2)}, \qquad \xi_m = \frac{\delta_m}{2R}$$
 
-### 2. Equations of Motion (1D Chain)
-For an array of $N$ beads of mass $m_i$:
+Stronger impacts travel faster: $V_s \propto F_{\max}^{1/6}$.
 
-$$m_i \frac{d^2 x_i}{dt^2} = F_{i-1, i} - F_{i, i+1} - b_{\text{air}} \frac{dx_i}{dt}$$
-
-Where $b_{\text{air}}$ represents slight ambient drag and contact viscoelastic damping.
-
-### 3. Nesterenko Soliton Velocity Scaling
-The propagation velocity $V_s$ of a solitary wave in a monodisperse chain depends strictly on its maximum dynamic contact force $F_{\max}$:
-
-$$V_s = \frac{2}{\sqrt{\pi}} \left(\frac{A}{m}\right)^{1/3} \left(\frac{F_{\max}}{A}\right)^{1/6} \propto F_{\max}^{1/6}$$
-
-Unlike linear acoustics, **stronger shocks travel faster** through granular media.
-
-### 4. Shock Mitigation in Tapered Chains
-By introducing a geometric radius gradient $R_{n+1} = q \cdot R_n$ ($q < 1$), particle mass scales as $m_n \propto q^{3n}$. As the solitary wave enters smaller beads, impedance mismatches generate significant backward reflections. 
-
-The initial coherent solitary wave disintegrates into high-frequency incoherent oscillations, dramatically reducing the transmitted peak force against the backing wall:
-
-$$\eta_{\text{mitigation}} = 1 - \frac{F_{\text{wall, peak}}}{F_{\text{incident, peak}}}$$
+### 4. Speed Independence of the Force Ratios
+With pure Hertz contacts the solution scales with the striker speed $v_0$ (forces $\propto v_0^{6/5}$, times $\propto v_0^{-1/5}$). The ratio $F_\text{wall}/F_\text{in}$ of a chain therefore does not depend on $v_0$.
 
 ---
 
 ## 🧪 Chain Presets
 
-| Preset | Topology | Physical Phenomenon |
-| :--- | :--- | :--- |
-| **1. Homogeneous Chain** | 12 identical 100Cr6 steel beads | Pure **Nesterenko Soliton (HNSW)** traveling with zero dispersion. |
-| **2. Tapered Chain** | Radii decrease geometrically ($q = 0.91$) | **Kinetic Energy Trapping**: Incident shock breaks into high-frequency oscillations ($\eta > 70\%$). |
-| **3. Acoustic Diode** | Asymmetric 3-stage stepped chain | **Wave Rectification**: Impact from left absorbs energy; impact from right transmits focused momentum. |
-| **4. Diatomic Lattice** | Alternating tungsten ($2.45\times$) & aluminum ($0.35\times$) | **Phononic Bandgap**: Wave scattering and destructive interference. |
-| **5. Elastomer Defect** | Soft polymer bead at lattice center | Localized solitary wave reflection & impedance mismatch. |
-| **6. Newton's Cradle** | Unbounded chain without rigid sensor wall | Pure momentum transfer with terminal particle ejection. |
+Striker: steel sphere Ø 20 mm. $F_\text{wall}/F_\text{in}$ from the simulation (`tests/verify.mjs`).
+
+| Preset | Topology | $F_\text{wall}/F_\text{in}$ | Observation |
+| :--- | :--- | :---: | :--- |
+| **1. Homogeneous chain** | 12 steel spheres Ø 20 mm | 1.64 | Solitary wave, 5 spheres wide, about 940 m/s at 5 m/s; reflection at the rigid wall raises the force |
+| **2. Tapered chain** | Radii shrink by $q = 0.91$ per sphere (Ø 20 → 7 mm) | 0.92 | Wall force 44 % lower than in the homogeneous chain at the same impact |
+| **3. Stepped chain** | 4 × Ø 23, 4 × Ø 17, 4 × Ø 12 mm | 0.93 / 2.43 | Large → small vs. small → large; reversed, the input force halves but the wall force rises (8.7 vs. 7.4 kN at 5 m/s) |
+| **4. Diatomic chain** | Alternating tungsten carbide Ø 21 mm and aluminium Ø 14.4 mm (mass ratio ≈ 17 : 1) | 0.51 | The wave reaches the wall later (480 vs. 383 µs at 5 m/s) |
+| **5. PTFE defect** | Steel chain with one PTFE sphere Ø 16 mm at the center | 0.47 | PTFE is about 140 times softer than steel; no damping in the model |
+| **6. Newton's cradle** | 8 steel spheres, free end | – | The last sphere leaves with 98.6 % of the striker speed (97 % of the energy); the rest stays in the chain |
+
+Material data (typical handbook values): steel E = 210 GPa, ν = 0.30, ρ = 7850 kg/m³; tungsten carbide 600 GPa, 0.22, 15 000 kg/m³; aluminium 70 GPa, 0.33, 2700 kg/m³; PTFE 1.46 GPa, 0.46, 2200 kg/m³.
 
 ---
 
-## ✨ Features & Visual Feedback
+## ✅ Verification
 
-* **Interactive 3D Mouse Drag:** Click and pull the striker projectile backward in 3D space to prime an impact at any velocity.
-* **Dynamic Stress Glow:** Spheres illuminate from cold steel-cyan to incandescent amber/white proportional to the instantaneous Hertzian contact stress tensor.
-* **Dual Real-time Oscilloscope:** High-rate 2D canvas displaying simultaneous contact force curves:
-  - 🔵 **Cyan:** Incident striker impact ($F_{\text{in}}$)
-  - 🟡 **Amber:** Core solitary wave amplitude ($F_{\text{center}}$)
-  - 🔴 **Crimson:** Transmitted shock force at the rigid piezo sensor wall ($F_{\text{wall}}$)
-* **Energy Balance Monitor:** Continuous tracking of kinetic ($E_{\text{kin}} = \sum \frac{1}{2}m v^2$) and elastic potential ($E_{\text{pot}} = \sum \frac{2}{5}A\delta^{5/2}$) energy.
-* **Symplectic Verlet Integration:** 45 sub-steps per animation frame ensuring numerical stability through the stiff non-linear $3/2$ contact exponent.
+```bash
+node tests/verify.mjs
+```
+
+| Check | Result |
+| :--- | :--- |
+| Two-sphere Hertz impact, peak force | 6936 N, closed form 6936 N |
+| Two-sphere Hertz impact, contact time ($t_c = 2.943\,\delta_{max}/v$) | 43.70 µs, closed form 43.60 µs |
+| Equal masses exchange velocities | 5.0000 / 0.0000 m/s |
+| Solitary wave speed, 40-sphere steel chain at 5 m/s | 940 m/s, Nesterenko 929 m/s (1.2 %) |
+| Solitary wave without decay | 5881 N at sphere 16 and sphere 31 |
+| Wave width | 5 spheres above 0.1 % of the peak velocity |
+| Energy conservation, all presets over 3 ms | error < 0.001 % |
+| Newton's cradle momentum | conserved to 1e-6 |
+
+---
+
+## ✨ Features
+
+* **Time scale:** 10 ms, 1 ms, 100 µs or 10 µs of simulated time per real second. The wave needs 0.2 to 0.8 ms to reach the wall. The free flight of the striker up to 1 mm before the chain is skipped.
+* **Mouse drag:** pull the striker back (1 cm = 1 m/s, 1 to 10 m/s); the speed slider follows.
+* **Stress glow:** spheres glow in proportion to their contact force, scaled to the predicted first-impact force.
+* **Oscilloscope:** peak force per frame for the striker contact ($F_\text{in}$), the chain center and the wall, with the simulated time span of the window.
+* **Metrics:** peak forces, $F_\text{wall}/F_\text{in}$, kinetic and elastic energy in mJ, simulated time.
 
 ---
 
 ## 🛠️ Local Development
 
-Clone the repository and launch directly in any modern browser:
+Open `index.html` in a browser, or serve the folder:
 
 ```bash
 git clone https://github.com/xallace/metamaterial-shock-lab.git
 cd metamaterial-shock-lab
-# Open index.html in your browser
-start index.html   # Windows
-open index.html    # macOS
-xdg-open index.html # Linux
+python -m http.server 8000   # then open http://localhost:8000
+node tests/verify.mjs        # physics checks (Node 18+)
 ```
 
 No package manager or build pipeline required.
@@ -118,5 +117,5 @@ No package manager or build pipeline required.
 
 ## 📄 License
 
-Distributed under the [MIT License](LICENSE).  
+Distributed under the [MIT License](LICENSE).
 Copyright © 2026 Walter (@xallace).

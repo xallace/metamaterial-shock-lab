@@ -11,23 +11,29 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. Initialize Core Engines
     const viewportContainer = document.getElementById('viewport-3d');
     const physics = new GranularPhysicsEngine();
-    const scene3d = new GranularScene3D(viewportContainer, physics);
 
-    // Initial chain setup
+    // Initial chain setup (the scene reads striker and beads in its constructor)
     physics.initChain('monodisperse', { strikerSpeed: 5.0 });
-    scene3d.syncWithPhysics();
+    const scene3d = new GranularScene3D(viewportContainer, physics);
 
     // 2. Application UI State
     const state = {
         isRunning: true,
         strikerSpeed: 5.0,
-        timeScale: 0.20,            // Default 0.20x slow-motion for crisp soliton observation
+        timeScale: 1e-4,            // 100 µs simulated per real second: the wave needs a few seconds through the chain
         currentPreset: 'monodisperse',
-        diodeReversed: false,
-        cameraPreset: 'iso'
+        diodeReversed: false
     };
 
     physics.timeScale = state.timeScale;
+
+    function formatForce(f) {
+        return f >= 1000 ? `${(f / 1000).toFixed(2)} kN` : `${f.toFixed(0)} N`;
+    }
+
+    function formatTime(t) {
+        return t >= 1e-3 ? `${(t * 1e3).toFixed(2)} ms` : `${(t * 1e6).toFixed(0)} µs`;
+    }
 
     // 3. Oscilloscope Canvas Setup
     const oscCanvas = document.getElementById('oscilloscope-canvas');
@@ -68,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Auto-scale peak for display
         let maxVal = Math.max(
-            150,
+            physics.metrics.referenceForce * 0.5,
             physics.metrics.peakInputForce * 1.15,
             physics.metrics.peakTransmittedForce * 1.15
         );
@@ -98,52 +104,67 @@ document.addEventListener('DOMContentLoaded', () => {
         // Amber = Center Pulse
         drawCurve(hist.centerForces, '#f59e0b', 1.5);
         // Crimson = Transmitted Wall Force
-        drawCurve(hist.wallForces, '#ef4444', 2.5);
+        if (physics.wall.enabled) drawCurve(hist.wallForces, '#ef4444', 2.5);
 
-        // Peak force scale indicator
+        // Force scale and simulated time span of the window
+        const dpr = window.devicePixelRatio || 1;
         ctx.fillStyle = '#64748b';
-        ctx.font = `${10 * (window.devicePixelRatio || 1)}px 'JetBrains Mono', monospace`;
-        ctx.fillText(`${Math.round(maxVal)} N`, padX + 4, padY + 12);
+        ctx.font = `${10 * dpr}px 'JetBrains Mono', monospace`;
+        ctx.fillText(formatForce(maxVal), padX + 4, padY + 12 * dpr);
         ctx.fillText('0 N', padX + 4, h - padY - 4);
+        const span = hist.times[count - 1] - hist.times[0];
+        const label = `Fenster ${formatTime(span)} Simulationszeit`;
+        ctx.textAlign = 'right';
+        ctx.fillText(label, w - padX - 4, padY + 12 * dpr);
+        ctx.textAlign = 'left';
     }
 
     // 4. Update Metric Badges
     const elPeakIn = document.getElementById('val-peak-in');
     const elPeakOut = document.getElementById('val-peak-out');
-    const elMitigation = document.getElementById('val-mitigation');
+    const elRatio = document.getElementById('val-ratio');
     const elKinEnergy = document.getElementById('val-kin-energy');
     const elPotEnergy = document.getElementById('val-pot-energy');
+    const elSimTime = document.getElementById('val-sim-time');
     const elSolitonStatus = document.getElementById('val-soliton-status');
 
     function updateMetricsUI() {
-        if (elPeakIn) elPeakIn.textContent = `${physics.metrics.peakInputForce.toFixed(1)} N`;
-        if (elPeakOut) elPeakOut.textContent = `${physics.metrics.peakTransmittedForce.toFixed(1)} N`;
+        const m = physics.metrics;
+        if (elPeakIn) elPeakIn.textContent = formatForce(m.peakInputForce);
+        if (elPeakOut) elPeakOut.textContent = physics.wall.enabled ? formatForce(m.peakTransmittedForce) : '–';
 
-        if (elMitigation) {
-            const pct = (physics.metrics.mitigationRatio * 100).toFixed(1);
-            elMitigation.textContent = `${pct} %`;
-            if (physics.metrics.mitigationRatio > 0.6) {
-                elMitigation.className = 'metric-value text-emerald-400 font-mono';
-            } else if (physics.metrics.mitigationRatio > 0.25) {
-                elMitigation.className = 'metric-value text-amber-400 font-mono';
+        if (elRatio) {
+            if (m.forceRatio === null) {
+                elRatio.textContent = '–';
+                elRatio.style.color = '#94a3b8';
             } else {
-                elMitigation.className = 'metric-value text-slate-300 font-mono';
+                elRatio.textContent = m.forceRatio.toFixed(2);
+                elRatio.style.color = m.forceRatio < 0.6 ? '#34d399' : m.forceRatio < 1 ? '#fbbf24' : '#f87171';
             }
         }
 
-        if (elKinEnergy) elKinEnergy.textContent = `${(physics.metrics.totalKineticEnergy * 1000).toFixed(1)} mJ`;
-        if (elPotEnergy) elPotEnergy.textContent = `${(physics.metrics.totalPotentialEnergy * 1000).toFixed(1)} mJ`;
+        if (elKinEnergy) elKinEnergy.textContent = `${(m.totalKineticEnergy * 1000).toFixed(1)} mJ`;
+        if (elPotEnergy) elPotEnergy.textContent = `${(m.totalPotentialEnergy * 1000).toFixed(1)} mJ`;
+        if (elSimTime) elSimTime.textContent = formatTime(physics.simTime);
 
         if (elSolitonStatus) {
-            if (physics.wall.force > 5) {
+            const fMin = 0.01 * m.referenceForce;
+            const chainMoving = physics.beads.some(b => b.v !== 0);
+            if (physics.wall.force > fMin) {
                 elSolitonStatus.textContent = 'WAND-AUFPRALL';
                 elSolitonStatus.style.color = '#ef4444';
-            } else if (physics.striker.contactForce > 5) {
+            } else if (physics.striker.contactForceRight > fMin) {
                 elSolitonStatus.textContent = 'IMPULS-EINLEITUNG';
                 elSolitonStatus.style.color = '#38bdf8';
-            } else if (physics.metrics.totalKineticEnergy > 0.05) {
-                elSolitonStatus.textContent = 'WELLENLAUF (HNSW)';
+            } else if (m.anyContact) {
+                elSolitonStatus.textContent = 'WELLENLAUF';
                 elSolitonStatus.style.color = '#f59e0b';
+            } else if (!chainMoving && physics.striker.v > 0) {
+                elSolitonStatus.textContent = 'ANFLUG';
+                elSolitonStatus.style.color = '#94a3b8';
+            } else if (m.totalKineticEnergy > 0) {
+                elSolitonStatus.textContent = 'FREIE BEWEGUNG';
+                elSolitonStatus.style.color = '#94a3b8';
             } else {
                 elSolitonStatus.textContent = 'RUHEZUSTAND';
                 elSolitonStatus.style.color = '#94a3b8';
@@ -155,13 +176,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const presetButtons = document.querySelectorAll('.preset-btn');
     const presetDesc = document.getElementById('preset-description');
 
+    // Ratios F_wall/F_in from tests/verify.mjs; they do not depend on the striker speed (Hertz scaling)
     const presetDescriptions = {
-        monodisperse: '<strong>Homogene Kette (Nesterenko-Soliton):</strong> 12 identische Wälzlager-Stahlkugeln. Ein einzelner, kompakter Solitonenpuls wandert ohne dispersive Verbreiterung durch das unkomprimierte Gitter ("Sonic Vacuum").',
-        tapered: '<strong>Verjüngte Kette (Tapered Shock Absorber):</strong> Exponentiell abnehmende Radien (q = 0.91). Der massive Stoß wird in hochfrequente Mikroschwingungen zerlegt (Kinetic Energy Trapping). Gewaltige Impulsreduktion an der Wand!',
-        diatomic: '<strong>Diatomisches Gitter (Bandlücke):</strong> Abwechselnd schwere Wolfram- und leichte Aluminiumkugeln. Erzeugt optische und akustische Phononenzweige – destruktive Interferenz filtert Schockwellenfrequenzen.',
-        diode: '<strong>Akustische Diode (Asymmetrisch):</strong> Gestufte 3-Zonen-Kette. Stoß von links nach rechts absorbiert Schockimpulse effektiv; umgekehrt abgefeuert wird der Impuls fokussiert weitergegeben.',
-        newton: '<strong>Newtons Wiege (Freies Ende):</strong> Klassischer Kugelstoß ohne Sensorwand. Das letzte Partikel hebt mit exakt der kinetischen Energie des Projektils ab.',
-        defect: '<strong>Störstellen-Defekt (Elastomer-Kern):</strong> Eine weiche Polymerkugel im Zentrum reflektiert und bricht die Solitonenwelle.'
+        monodisperse: '<strong>Homogene Kette:</strong> 12 Stahlkugeln Ø 20 mm, berührend, ohne Vorspannung ("Sonic Vacuum"). Aus dem Stoß entsteht eine Solitärwelle von rund 5 Kugeldurchmessern Breite, die ohne Abklingen durch die Kette läuft (bei 5 m/s mit rund 940 m/s). An der starren Wand wird sie reflektiert, dort wirkt das 1,64-Fache der Eingangskraft.',
+        tapered: '<strong>Verjüngte Kette:</strong> Jede Kugel ist 9 % kleiner als die vorige (q = 0,91, Ø 20 → 7 mm). An der Wand kommen 0,92 × F_Ein an. Bei gleichem Stoß sind das 44 % weniger als bei der homogenen Kette (6,4 statt 11,4 kN bei 5 m/s).',
+        diatomic: '<strong>Diatomische Kette:</strong> Abwechselnd Wolframkarbid Ø 21 mm und Aluminium Ø 14,4 mm, Massenverhältnis rund 17 : 1. Die Welle braucht länger bis zur Wand (480 statt 383 µs bei 5 m/s), dort kommen 0,51 × F_Ein an.',
+        diode: '<strong>Gestufte Kette:</strong> 4 × Ø 23 mm, 4 × Ø 17 mm, 4 × Ø 12 mm. Von groß nach klein kommen 0,93 × F_Ein an der Wand an (7,4 kN bei 5 m/s). Umgekehrt (klein nach groß) trifft die Stoßkugel zuerst eine kleine Kugel: die Eingangskraft halbiert sich, an der Wand kommt aber mehr an (2,43 × F_Ein, 8,7 kN).',
+        newton: '<strong>Newtons Wiege:</strong> 8 Stahlkugeln, rechts ohne Wand. Die letzte Kugel fliegt mit 98,6 % der Stoßgeschwindigkeit weg und nimmt 97 % der Energie mit. Der Rest bleibt als Bewegung in der Kette, weil Hertz-Kontakte nachgiebig sind. Das Lehrbuchbild mit genau einer Kugel gilt nur für starre Kugeln.',
+        defect: '<strong>Weiche Störstelle:</strong> Stahlkette mit einer PTFE-Kugel Ø 16 mm in der Mitte, PTFE ist rund 140-mal weicher als Stahl. An der Wand kommen 0,47 × F_Ein an, ohne Dämpfung im Modell.'
     };
 
     function applyPreset(presetName) {
@@ -186,9 +208,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         physics.initChain(presetName, {
             strikerSpeed: state.strikerSpeed,
-            reverse: state.diodeReversed
+            reverse: presetName === 'diode' && state.diodeReversed
         });
         scene3d.syncWithPhysics();
+        scene3d.setView(scene3d.view);
     }
 
     presetButtons.forEach(btn => {
@@ -210,11 +233,21 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Drag release in the 3D view sets the speed like the slider
+    scene3d.onStrikerLaunch = (speed) => {
+        state.strikerSpeed = speed;
+        if (speedSlider) speedSlider.value = speed;
+        if (speedDisplay) speedDisplay.textContent = `${speed.toFixed(1)} m/s`;
+        state.isRunning = true;
+        setPlayPauseLabel();
+    };
+
     if (fireBtn) {
         fireBtn.addEventListener('click', () => {
             physics.reset(state.strikerSpeed);
             scene3d.syncWithPhysics();
             state.isRunning = true;
+            setPlayPauseLabel();
         });
     }
 
@@ -222,6 +255,8 @@ document.addEventListener('DOMContentLoaded', () => {
         resetBtn.addEventListener('click', () => {
             physics.reset(state.strikerSpeed);
             scene3d.syncWithPhysics();
+            state.isRunning = false;
+            setPlayPauseLabel();
         });
     }
 
@@ -241,21 +276,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const playPauseBtn = document.getElementById('btn-play-pause');
     const stepBtn = document.getElementById('btn-step');
 
+    function setPlayPauseLabel() {
+        if (!playPauseBtn) return;
+        playPauseBtn.innerHTML = state.isRunning ?
+            '<i class="ph-bold ph-pause"></i><span>Pause</span>' :
+            '<i class="ph-bold ph-play"></i><span>Start</span>';
+    }
+
     if (playPauseBtn) {
         playPauseBtn.addEventListener('click', () => {
             state.isRunning = !state.isRunning;
-            playPauseBtn.innerHTML = state.isRunning ?
-                '<i class="ph-bold ph-pause"></i><span>Pause</span>' :
-                '<i class="ph-bold ph-play"></i><span>Start</span>';
+            setPlayPauseLabel();
         });
     }
 
     if (stepBtn) {
         stepBtn.addEventListener('click', () => {
             state.isRunning = false;
-            if (playPauseBtn) {
-                playPauseBtn.innerHTML = '<i class="ph-bold ph-play"></i><span>Start</span>';
-            }
+            setPlayPauseLabel();
             physics.update(0.016);
             scene3d.render();
             renderOscilloscope();
@@ -263,28 +301,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Camera view presets
-    const camIsoBtn = document.getElementById('cam-iso');
-    const camFrontBtn = document.getElementById('cam-front');
-    const camTopBtn = document.getElementById('cam-top');
-
-    if (camIsoBtn) {
-        camIsoBtn.addEventListener('click', () => {
-            scene3d.camera.position.set(8.5, 6.5, 22.0);
-            scene3d.controls.target.set(8.5, 0, 0);
-        });
-    }
-    if (camFrontBtn) {
-        camFrontBtn.addEventListener('click', () => {
-            scene3d.camera.position.set(8.5, 1.2, 24.0);
-            scene3d.controls.target.set(8.5, 0.5, 0);
-        });
-    }
-    if (camTopBtn) {
-        camTopBtn.addEventListener('click', () => {
-            scene3d.camera.position.set(8.5, 26.0, 0.1);
-            scene3d.controls.target.set(8.5, 0, 0);
-        });
+    // Camera view presets, framed on the current chain
+    for (const view of ['iso', 'front', 'top']) {
+        const btn = document.getElementById(`cam-${view}`);
+        if (btn) btn.addEventListener('click', () => scene3d.setView(view));
     }
 
     // Diode reverse toggle

@@ -1,38 +1,44 @@
 /**
  * Granular Metamaterial Shock Lab — Physics Engine
- * Non-linear 1D Discrete Hertzian Contact Dynamics
- * 
+ * 1D chain of elastic spheres with Hertzian contacts, SI units (m, kg, s, N, J)
+ *
  * Equations of Motion:
- * m_i * u''_i = A_{i-1,i} * [u_{i-1} - u_i]_+^(3/2) - A_{i,i+1} * [u_i - u_{i+1}]_+^(3/2)
+ * m_i * x''_i = F_{i-1,i} - F_{i,i+1},   F = A * δ^(3/2) for δ > 0, otherwise 0
  * Contact Stiffness: A = (4/3) * E* * sqrt(R*)
- * Integrator: Sub-stepped Symplectic Velocity Verlet
- * 
+ *   1/E* = (1 - ν1²)/E1 + (1 - ν2²)/E2,   1/R* = 1/R1 + 1/R2 (sphere on flat wall: R* = R)
+ * Integrator: Velocity Verlet with a fixed sub-step of at most 0.1 µs
+ * No damping: the total energy stays constant and serves as a check of the integrator.
+ *
  * Copyright (c) 2026 Walter (@xallace)
  * MIT License
  */
 
+// Material data (typical handbook values)
+const MATERIALS = {
+    steel:    { label: 'Stahl',         E: 210e9,  nu: 0.30, rho: 7850 },
+    tungsten: { label: 'Wolframkarbid', E: 600e9,  nu: 0.22, rho: 15000 },
+    aluminum: { label: 'Aluminium',     E: 70e9,   nu: 0.33, rho: 2700 },
+    ptfe:     { label: 'PTFE',          E: 1.46e9, nu: 0.46, rho: 2200 }
+};
+
+const BASE_RADIUS = 0.01;      // Reference sphere Ø 20 mm
+const STRIKER_GAP = 0.001;     // Striker starts 1 mm in front of the chain
+const CONTACT_EPS = 1e-12;     // Overlaps below 1 pm are rounding noise of the touching layout
+
 class GranularPhysicsEngine {
     constructor() {
-        // Physical & Numerical Tuning Parameters
-        this.baseStiffness = 18000;      // Contact stiffness scaling (N/m^(3/2) normalized)
-        this.contactDamping = 12.0;      // Viscoelastic damping coefficient gamma
-        this.airDrag = 0.04;             // Ambient air resistance
-        this.wallStiffness = 32000;      // Rigid sensor wall stiffness
-        this.density = 7.85;             // Density factor (steel-like, g/cm^3 relative)
+        this.maxSubDt = 1e-7;            // Largest integration step [s]
+        this.simTime = 0;                // Elapsed simulation time [s]
+        this.timeScale = 1e-4;           // Simulated seconds per real second
 
-        this.subSteps = 45;              // Sub-steps per render frame for stiff stability
-        this.simTime = 0;                // Elapsed simulation time
-        this.timeScale = 1.0;            // Speed multiplier (slow-mo)
-
-        this.beads = [];                 // Granule objects
+        this.beads = [];
+        this.striker = null;
         this.wall = {
             enabled: true,
-            x: 18.0,
+            x: 0,
             force: 0,
             peakForce: 0,
-            thickness: 0.6,
-            height: 4.5,
-            width: 4.5
+            material: 'steel'
         };
 
         // Live Diagnostic Metrics
@@ -43,20 +49,27 @@ class GranularPhysicsEngine {
             initialEnergy: 0,
             peakInputForce: 0,
             peakTransmittedForce: 0,
-            mitigationRatio: 0,          // eta = 1 - (F_wall / F_in)
-            solitonSpeed: 0
+            forceRatio: null,            // F_wall,max / F_in,max (null until the wall is hit)
+            referenceForce: 1,           // Predicted peak force of the first impact [N]
+            anyContact: false,
+            approachSkipped: 0           // Skipped free-flight time of the striker [s]
         };
 
-        // History Buffer for Real-Time Oscilloscope Plot
+        // History Buffer for Real-Time Oscilloscope Plot (one peak value per frame)
         this.historyLength = 320;
         this.history = {
             times: [],
             wallForces: [],
-            beadForces: [],              // Contact force at bead 1 (input impulse)
-            centerForces: []             // Contact force at center bead
+            beadForces: [],              // Contact force striker / bead 1 (input impulse)
+            centerForces: []             // Contact force at the center bead
         };
 
+        this.frameStrikerPeak = 0;
+        this.frameWallPeak = 0;
+        this.frameCenterPeak = 0;
+
         this.currentPreset = 'monodisperse';
+        this.params = { strikerSpeed: 5.0, reverse: false };
     }
 
     /**
@@ -64,11 +77,17 @@ class GranularPhysicsEngine {
      */
     initChain(preset = 'monodisperse', params = {}) {
         this.currentPreset = preset;
+        this.params = {
+            strikerSpeed: params.strikerSpeed !== undefined ? params.strikerSpeed : 5.0,
+            reverse: !!params.reverse
+        };
         this.beads = [];
         this.simTime = 0;
         this.metrics.peakInputForce = 0;
         this.metrics.peakTransmittedForce = 0;
-        this.metrics.mitigationRatio = 0;
+        this.metrics.forceRatio = null;
+        this.metrics.approachSkipped = 0;
+        this.metrics.anyContact = false;
         this.wall.force = 0;
         this.wall.peakForce = 0;
         this.history.times = [];
@@ -76,340 +95,296 @@ class GranularPhysicsEngine {
         this.history.beadForces = [];
         this.history.centerForces = [];
 
-        const strikerSpeed = params.strikerSpeed !== undefined ? params.strikerSpeed : 5.0;
-        const strikerGap = params.strikerGap !== undefined ? params.strikerGap : 3.0;
-
-        let numBeads = 12;
-        let radii = [];
+        let radii = [];        // multiples of BASE_RADIUS
         let materials = [];
 
         switch (preset) {
             case 'tapered':
-                // Monotonically decreasing bead radii (geometric tapering factor q = 0.91)
-                numBeads = 12;
-                const q = 0.91;
-                for (let i = 0; i < numBeads; i++) {
-                    radii.push(1.0 * Math.pow(q, i));
+                // Geometrically decreasing radii, q = 0.91
+                for (let i = 0; i < 12; i++) {
+                    radii.push(Math.pow(0.91, i));
                     materials.push('steel');
                 }
                 break;
 
             case 'diatomic':
-                // Alternating heavy and light beads (creates phononic bandgaps)
-                numBeads = 14;
-                for (let i = 0; i < numBeads; i++) {
+                // Alternating heavy and light beads
+                for (let i = 0; i < 14; i++) {
                     radii.push(i % 2 === 0 ? 1.05 : 0.72);
                     materials.push(i % 2 === 0 ? 'tungsten' : 'aluminum');
                 }
                 break;
 
             case 'diode':
-                // Acoustic Diode: 4 large beads -> 4 medium -> 4 small
-                numBeads = 12;
-                for (let i = 0; i < numBeads; i++) {
-                    if (i < 4) radii.push(1.15);
-                    else if (i < 8) radii.push(0.85);
-                    else radii.push(0.60);
+                // Stepped chain: 4 large -> 4 medium -> 4 small (reversed: small -> large)
+                for (let i = 0; i < 12; i++) {
+                    radii.push(i < 4 ? 1.15 : i < 8 ? 0.85 : 0.60);
                     materials.push('steel');
                 }
+                if (this.params.reverse) radii.reverse();
                 break;
 
             case 'defect':
-                // Chain with a soft/light elastomer defect at the center
-                numBeads = 13;
-                for (let i = 0; i < numBeads; i++) {
-                    if (i === 6) {
-                        radii.push(0.8);
-                        materials.push('polymer');
-                    } else {
-                        radii.push(1.0);
-                        materials.push('steel');
-                    }
+                // Steel chain with a soft PTFE sphere at the center
+                for (let i = 0; i < 13; i++) {
+                    radii.push(i === 6 ? 0.8 : 1.0);
+                    materials.push(i === 6 ? 'ptfe' : 'steel');
                 }
                 break;
 
             case 'newton':
-                // Classic Newton's Cradle (Free boundary on the right)
-                numBeads = 8;
-                for (let i = 0; i < numBeads; i++) {
+                // Free end on the right, no wall
+                for (let i = 0; i < 8; i++) {
                     radii.push(1.0);
                     materials.push('steel');
                 }
-                this.wall.enabled = false;
                 break;
 
             case 'monodisperse':
             default:
-                // Classical identical steel beads (Pure Nesterenko Soliton)
-                numBeads = 12;
-                for (let i = 0; i < numBeads; i++) {
+                for (let i = 0; i < 12; i++) {
                     radii.push(1.0);
                     materials.push('steel');
                 }
                 break;
         }
 
-        if (preset !== 'newton') {
-            this.wall.enabled = true;
-        }
+        this.wall.enabled = preset !== 'newton';
 
-        // Layout beads along X-axis starting at x = 0
+        // Layout: touching spheres without precompression ("sonic vacuum")
         let currentX = 0;
-        for (let i = 0; i < numBeads; i++) {
-            const r = radii[i];
-            const mat = materials[i];
-            
-            // Mass proportional to volume: m = (4/3) * pi * r^3 * density
-            let densityMultiplier = 1.0;
-            if (mat === 'tungsten') densityMultiplier = 2.45;
-            if (mat === 'aluminum') densityMultiplier = 0.35;
-            if (mat === 'polymer')  densityMultiplier = 0.15;
-
-            const mass = (4 / 3) * Math.PI * Math.pow(r, 3) * this.density * densityMultiplier;
-
-            if (i > 0) {
-                currentX += radii[i - 1] + r;
-            } else {
-                currentX = r;
-            }
-
-            this.beads.push({
-                id: i,
-                r: r,
-                m: mass,
-                x: currentX,
-                v: 0,
-                a: 0,
-                material: mat,
-                contactForceLeft: 0,
-                contactForceRight: 0,
-                stressGlow: 0,
-                initialX: currentX
-            });
+        for (let i = 0; i < radii.length; i++) {
+            const r = radii[i] * BASE_RADIUS;
+            currentX = i === 0 ? r : currentX + this.beads[i - 1].r + r;
+            this.beads.push(this.makeBody(r, materials[i], currentX, 0));
         }
 
-        // Configure Striker (Impactor) Bead at index 0 or as a dedicated impactor
-        const firstBead = this.beads[0];
-        const strikerR = preset === 'diode' && params.reverse ? 0.6 : 1.0;
-        const strikerMass = (4 / 3) * Math.PI * Math.pow(strikerR, 3) * this.density;
+        // Striker: steel sphere Ø 20 mm
+        const first = this.beads[0];
+        const strikerX = first.x - first.r - BASE_RADIUS - STRIKER_GAP;
+        this.striker = this.makeBody(BASE_RADIUS, 'steel', strikerX, this.params.strikerSpeed);
+        this.striker.initialSpeed = this.params.strikerSpeed;
 
-        // Position of the striker is to the left of bead 0
-        const strikerPos = firstBead.x - firstBead.r - strikerR - strikerGap;
+        // Rigid wall touching the last bead
+        const last = this.beads[this.beads.length - 1];
+        this.wall.x = last.x + last.r;
 
-        this.striker = {
-            r: strikerR,
-            m: strikerMass,
-            x: strikerPos,
-            v: strikerSpeed,
+        // Predicted peak force of the first impact (two-body Hertz impact), used to scale glow and plots
+        const A = this.getContactStiffness(this.striker, first);
+        const mEff = this.striker.m * first.m / (this.striker.m + first.m);
+        const v = Math.max(0.1, this.params.strikerSpeed);
+        const deltaMax = Math.pow(5 * mEff * v * v / (4 * A), 0.4);
+        this.metrics.referenceForce = A * Math.pow(deltaMax, 1.5);
+
+        this.metrics.initialEnergy = 0.5 * this.striker.m * this.params.strikerSpeed ** 2;
+        this.calculateMetrics(false);
+    }
+
+    makeBody(r, material, x, v) {
+        const mat = MATERIALS[material];
+        return {
+            r: r,
+            m: (4 / 3) * Math.PI * r ** 3 * mat.rho,
+            x: x,
+            v: v,
             a: 0,
-            material: 'hardened_steel',
-            contactForce: 0,
+            material: material,
+            contactForceLeft: 0,
+            contactForceRight: 0,
+            framePeak: 0,
             stressGlow: 0,
-            initialX: strikerPos,
-            initialSpeed: strikerSpeed
+            initialX: x
         };
-
-        // Position the rigid end sensor wall immediately touching or slightly offset from last bead
-        const lastBead = this.beads[this.beads.length - 1];
-        this.wall.x = lastBead.x + lastBead.r + 0.05;
-
-        // Compute initial total energy (striker kinetic energy)
-        this.metrics.initialEnergy = 0.5 * this.striker.m * Math.pow(strikerSpeed, 2);
     }
 
     /**
-     * Resets the current preset with new striker speed
+     * Resets the current preset (keeps the diode direction)
      */
     reset(strikerSpeed = null) {
-        const speed = strikerSpeed !== null ? strikerSpeed : this.striker.initialSpeed;
-        this.initChain(this.currentPreset, { strikerSpeed: speed });
+        const speed = strikerSpeed !== null ? strikerSpeed : this.params.strikerSpeed;
+        this.initChain(this.currentPreset, { strikerSpeed: speed, reverse: this.params.reverse });
     }
 
     /**
-     * Computes Hertzian effective stiffness between two spheres
+     * Restarts the current preset with the striker released at x [m] with speed v [m/s] (drag interaction)
      */
-    getContactStiffness(r1, r2, mat1, mat2) {
-        const rEff = (r1 * r2) / (r1 + r2);
-        let matFactor = 1.0;
-        if (mat1 === 'polymer' || mat2 === 'polymer') matFactor = 0.15;
-        if (mat1 === 'tungsten' || mat2 === 'tungsten') matFactor = 1.8;
-        if (mat1 === 'aluminum' || mat2 === 'aluminum') matFactor = 0.5;
-
-        return this.baseStiffness * matFactor * Math.sqrt(rEff);
+    launchFrom(x, v) {
+        this.reset(v);
+        this.striker.x = x;
+        this.striker.initialX = x;
     }
 
     /**
-     * Physics update step using Velocity Verlet integration
-     * @param {number} dt Frame time delta in seconds
+     * Hertz contact stiffness A [N/m^1.5] between two spheres, or a sphere and the flat wall (b = null)
+     */
+    getContactStiffness(a, b) {
+        const ma = MATERIALS[a.material];
+        const mb = MATERIALS[b ? b.material : this.wall.material];
+        const eStar = 1 / ((1 - ma.nu ** 2) / ma.E + (1 - mb.nu ** 2) / mb.E);
+        const rStar = b ? (a.r * b.r) / (a.r + b.r) : a.r;
+        return (4 / 3) * eStar * Math.sqrt(rStar);
+    }
+
+    /**
+     * Advances the simulation by one animation frame
+     * @param {number} dt Frame time delta in real seconds
      */
     update(dt) {
         if (dt <= 0) return;
-        // Apply Slow-Mo / Time Scale factor
-        const effectiveDt = dt * this.timeScale;
-        const subDt = effectiveDt / this.subSteps;
 
-        for (let step = 0; step < this.subSteps; step++) {
+        this.skipFreeApproach();
+
+        const effectiveDt = dt * this.timeScale;
+        const subSteps = Math.min(20000, Math.max(1, Math.ceil(effectiveDt / this.maxSubDt)));
+        const subDt = effectiveDt / subSteps;
+
+        this.frameStrikerPeak = 0;
+        this.frameWallPeak = 0;
+        this.frameCenterPeak = 0;
+        for (const b of this.beads) b.framePeak = 0;
+
+        for (let step = 0; step < subSteps; step++) {
             this.verletSubStep(subDt);
             this.simTime += subDt;
         }
 
-        // Post-step metrics & diagnostics
-        this.calculateMetrics();
+        this.calculateMetrics(true);
 
-        // Decay visual stress glow values smoothly for high-framerate rendering
-        this.striker.stressGlow = Math.max(0, this.striker.stressGlow * 0.88);
-        for (let i = 0; i < this.beads.length; i++) {
-            const b = this.beads[i];
-            const maxF = Math.max(b.contactForceLeft, b.contactForceRight);
-            // Normalized glow between 0 and 1
-            const targetGlow = Math.min(1.0, maxF / 250);
-            b.stressGlow = Math.max(targetGlow, b.stressGlow * 0.90);
+        // Stress glow follows the largest contact force of the frame
+        const fRef = this.metrics.referenceForce;
+        this.striker.stressGlow = Math.max(Math.min(1, this.frameStrikerPeak / fRef), this.striker.stressGlow * 0.88);
+        for (const b of this.beads) {
+            b.stressGlow = Math.max(Math.min(1, b.framePeak / fRef), b.stressGlow * 0.90);
         }
     }
 
     /**
-     * Single symplectic Verlet sub-step
+     * While the chain is at rest and the striker is still in free flight, jump to 1 mm before contact.
+     * At the default time scale the approach from a pulled-back striker would take minutes.
+     */
+    skipFreeApproach() {
+        const s = this.striker;
+        const first = this.beads[0];
+        if (this.metrics.anyContact || s.v <= 0) return;
+        if (this.beads.some(b => b.v !== 0)) return;
+        const gap = (first.x - first.r) - (s.x + s.r);
+        if (gap <= STRIKER_GAP) return;
+        const skip = (gap - STRIKER_GAP) / s.v;
+        s.x += s.v * skip;
+        this.simTime += skip;
+        this.metrics.approachSkipped += skip;
+    }
+
+    /**
+     * Single Velocity Verlet sub-step
      */
     verletSubStep(dt) {
-        const allObjects = [this.striker, ...this.beads];
-        const numObjects = allObjects.length;
+        const all = [this.striker, ...this.beads];
+        const n = all.length;
 
-        // Step 1: Position update from current velocity and acceleration
-        for (let i = 0; i < numObjects; i++) {
-            const obj = allObjects[i];
+        // Positions from current velocity and acceleration
+        for (let i = 0; i < n; i++) {
+            const obj = all[i];
             obj.x += obj.v * dt + 0.5 * obj.a * dt * dt;
-            // Reset contact forces for this sub-step
-            if (obj === this.striker) {
-                obj.contactForce = 0;
-            } else {
-                obj.contactForceLeft = 0;
-                obj.contactForceRight = 0;
-            }
+            obj.contactForceLeft = 0;
+            obj.contactForceRight = 0;
         }
         this.wall.force = 0;
+        let anyContact = false;
 
-        // Step 2: Compute non-linear Hertzian contact forces
-        const forces = new Float64Array(numObjects);
-
-        for (let i = 0; i < numObjects - 1; i++) {
-            const b1 = allObjects[i];
-            const b2 = allObjects[i + 1];
-
-            const dist = b2.x - b1.x;
-            const overlap = (b1.r + b2.r) - dist;
-
+        // Hertz contact forces (compression only)
+        const forces = new Float64Array(n);
+        for (let i = 0; i < n - 1; i++) {
+            const b1 = all[i];
+            const b2 = all[i + 1];
+            const overlap = (b1.r + b2.r) - (b2.x - b1.x);
             if (overlap > 0) {
-                const kEff = this.getContactStiffness(b1.r, b2.r, b1.material, b2.material);
-                const vRel = b1.v - b2.v; // Positive if approaching
-
-                // Hertzian non-linear power 3/2 + viscoelastic damping
-                const fElastic = kEff * Math.pow(overlap, 1.5);
-                const fDamping = this.contactDamping * Math.sqrt(Math.max(0, overlap)) * vRel;
-                const fTotal = Math.max(0, fElastic + fDamping); // Compression only
-
-                forces[i] -= fTotal;
-                forces[i + 1] += fTotal;
-
-                if (i === 0) {
-                    this.striker.contactForce = fTotal;
-                    this.beads[0].contactForceLeft = fTotal;
-                    if (fTotal > this.metrics.peakInputForce) {
-                        this.metrics.peakInputForce = fTotal;
-                    }
-                } else {
-                    const beadIdx1 = i - 1;
-                    const beadIdx2 = i;
-                    this.beads[beadIdx1].contactForceRight = fTotal;
-                    this.beads[beadIdx2].contactForceLeft = fTotal;
-                }
+                const f = this.getContactStiffness(b1, b2) * Math.pow(overlap, 1.5);
+                forces[i] -= f;
+                forces[i + 1] += f;
+                b1.contactForceRight = f;
+                b2.contactForceLeft = f;
+                if (overlap > CONTACT_EPS) anyContact = true;
             }
         }
 
-        // Wall boundary contact on the rightmost bead
+        // Rigid wall on the right
         if (this.wall.enabled) {
-            const lastBead = this.beads[this.beads.length - 1];
-            const wallOverlap = (lastBead.x + lastBead.r) - this.wall.x;
-
-            if (wallOverlap > 0) {
-                const kWall = this.wallStiffness * Math.sqrt(lastBead.r);
-                const fElasticWall = kWall * Math.pow(wallOverlap, 1.5);
-                const fDampingWall = this.contactDamping * 1.5 * Math.sqrt(wallOverlap) * Math.max(0, lastBead.v);
-                const fWall = Math.max(0, fElasticWall + fDampingWall);
-
-                forces[numObjects - 1] -= fWall;
-                lastBead.contactForceRight = fWall;
-                this.wall.force = fWall;
-
-                if (fWall > this.wall.peakForce) {
-                    this.wall.peakForce = fWall;
-                    this.metrics.peakTransmittedForce = fWall;
-                }
+            const last = all[n - 1];
+            const overlap = (last.x + last.r) - this.wall.x;
+            if (overlap > 0) {
+                const f = this.getContactStiffness(last, null) * Math.pow(overlap, 1.5);
+                forces[n - 1] -= f;
+                last.contactForceRight = f;
+                this.wall.force = f;
+                if (overlap > CONTACT_EPS) anyContact = true;
             }
         }
+        this.metrics.anyContact = anyContact;
 
-        // Step 3 & 4: Velocity update with new acceleration
-        for (let i = 0; i < numObjects; i++) {
-            const obj = allObjects[i];
-            // Linear air damping
-            const dragForce = -this.airDrag * obj.v;
-            const newA = (forces[i] + dragForce) / obj.m;
-
+        // Velocities from the mean of old and new acceleration
+        for (let i = 0; i < n; i++) {
+            const obj = all[i];
+            const newA = forces[i] / obj.m;
             obj.v += 0.5 * (obj.a + newA) * dt;
             obj.a = newA;
+        }
+
+        // Peaks for metrics, oscilloscope and glow
+        const fIn = this.striker.contactForceRight;
+        const fWall = this.wall.force;
+        const center = this.beads[Math.floor(this.beads.length / 2)];
+        if (fIn > this.metrics.peakInputForce) this.metrics.peakInputForce = fIn;
+        if (fWall > this.wall.peakForce) {
+            this.wall.peakForce = fWall;
+            this.metrics.peakTransmittedForce = fWall;
+        }
+        if (fIn > this.frameStrikerPeak) this.frameStrikerPeak = fIn;
+        if (fWall > this.frameWallPeak) this.frameWallPeak = fWall;
+        if (center.contactForceLeft > this.frameCenterPeak) this.frameCenterPeak = center.contactForceLeft;
+        for (const b of this.beads) {
+            const f = Math.max(b.contactForceLeft, b.contactForceRight);
+            if (f > b.framePeak) b.framePeak = f;
         }
     }
 
     /**
      * Energy and diagnostic calculations
+     * @param {boolean} record Append the frame peaks to the oscilloscope history
      */
-    calculateMetrics() {
-        let kin = 0.5 * this.striker.m * Math.pow(this.striker.v, 2);
+    calculateMetrics(record) {
+        const all = [this.striker, ...this.beads];
+        let kin = 0;
         let pot = 0;
 
-        const allObjects = [this.striker, ...this.beads];
-        for (let i = 0; i < allObjects.length - 1; i++) {
-            const b1 = allObjects[i];
-            const b2 = allObjects[i + 1];
-            const overlap = (b1.r + b2.r) - (b2.x - b1.x);
+        for (let i = 0; i < all.length; i++) {
+            kin += 0.5 * all[i].m * all[i].v ** 2;
+        }
+        for (let i = 0; i < all.length - 1; i++) {
+            const overlap = (all[i].r + all[i + 1].r) - (all[i + 1].x - all[i].x);
             if (overlap > 0) {
-                const kEff = this.getContactStiffness(b1.r, b2.r, b1.material, b2.material);
-                // Integral of k * delta^(3/2) d_delta = (2/5) * k * delta^(5/2)
-                pot += (2 / 5) * kEff * Math.pow(overlap, 2.5);
+                // Integral of A * δ^(3/2) dδ = (2/5) * A * δ^(5/2)
+                pot += 0.4 * this.getContactStiffness(all[i], all[i + 1]) * Math.pow(overlap, 2.5);
             }
         }
-
-        // Wall potential
         if (this.wall.enabled) {
-            const lastBead = this.beads[this.beads.length - 1];
-            const wallOverlap = (lastBead.x + lastBead.r) - this.wall.x;
-            if (wallOverlap > 0) {
-                const kWall = this.wallStiffness * Math.sqrt(lastBead.r);
-                pot += (2 / 5) * kWall * Math.pow(wallOverlap, 2.5);
-            }
-        }
-
-        for (let i = 0; i < this.beads.length; i++) {
-            kin += 0.5 * this.beads[i].m * Math.pow(this.beads[i].v, 2);
+            const last = all[all.length - 1];
+            const overlap = (last.x + last.r) - this.wall.x;
+            if (overlap > 0) pot += 0.4 * this.getContactStiffness(last, null) * Math.pow(overlap, 2.5);
         }
 
         this.metrics.totalKineticEnergy = kin;
         this.metrics.totalPotentialEnergy = pot;
         this.metrics.totalEnergy = kin + pot;
+        this.metrics.forceRatio = this.wall.enabled && this.metrics.peakTransmittedForce > 0 && this.metrics.peakInputForce > 0
+            ? this.metrics.peakTransmittedForce / this.metrics.peakInputForce
+            : null;
 
-        // Shock Mitigation Ratio: eta = 1 - (F_wall_max / F_input_max)
-        if (this.metrics.peakInputForce > 0) {
-            const ratio = 1 - (this.metrics.peakTransmittedForce / this.metrics.peakInputForce);
-            this.metrics.mitigationRatio = Math.max(0, Math.min(1.0, ratio));
-        }
-
-        // Append to history buffer for plotting
+        if (!record) return;
         this.history.times.push(this.simTime);
-        this.history.wallForces.push(this.wall.force);
-        this.history.beadForces.push(this.striker.contactForce);
-
-        const centerIdx = Math.floor(this.beads.length / 2);
-        const centerF = this.beads[centerIdx] ? this.beads[centerIdx].contactForceLeft : 0;
-        this.history.centerForces.push(centerF);
+        this.history.wallForces.push(this.frameWallPeak);
+        this.history.beadForces.push(this.frameStrikerPeak);
+        this.history.centerForces.push(this.frameCenterPeak);
 
         if (this.history.times.length > this.historyLength) {
             this.history.times.shift();
@@ -422,3 +397,4 @@ class GranularPhysicsEngine {
 
 // Export for browser
 window.GranularPhysicsEngine = GranularPhysicsEngine;
+window.GRANULAR_MATERIALS = MATERIALS;

@@ -6,7 +6,7 @@
     <title>Granular Metamaterial Shock Lab — 3D Solitary Waves & Impulse Mitigation</title>
     
     <!-- Meta & Social -->
-    <meta name="description" content="Interaktive 3D-Simulation nichtlinearer Hertzscher Solitonen (HNSWs), Impulsdämpfung in verjüngten Granularketten und akustischer Diodenwirkung.">
+    <meta name="description" content="Interaktive 3D-Simulation von Solitärwellen in Kugelketten mit Hertz-Kontakt: homogene, verjüngte, gestufte und diatomische Ketten in SI-Einheiten, geprüft gegen Hertz und Nesterenko.">
     <meta name="author" content="Walter (@xallace)">
 
     <!-- Google Fonts -->
@@ -15,7 +15,7 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
     <!-- Phosphor Icons -->
-    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.2"></script>
 
     <!-- Three.js & OrbitControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -41,7 +41,7 @@
                             3D PBR · Verlet Integrator
                         </span>
                     </h1>
-                    <p>Nichtlineare Hertzsche Solitonen (HNSWs) &amp; Impulsdämpfung in 1D-Granularkristallen</p>
+                    <p>Solitärwellen und Stoßübertragung in Kugelketten mit Hertz-Kontakt</p>
                 </div>
             </div>
 
@@ -64,7 +64,7 @@
             <div class="viewport-card glass-panel">
                 <div class="viewport-hint">
                     <i class="ph-fill ph-hand-pointing text-cyan-400"></i>
-                    <span>Tipp: Ziehe das linke Projektil mit der Maus zurück oder rotiere die Kamera frei</span>
+                    <span>Tipp: Stoßkugel links mit der Maus zurückziehen (1 cm ≙ 1 m/s) oder die Kamera frei drehen</span>
                 </div>
 
                 <div class="camera-controls-overlay">
@@ -87,15 +87,15 @@
                     <div class="osc-legend">
                         <div class="legend-item">
                             <span class="legend-dot dot-cyan"></span>
-                            <span>F_Eingang (Projektil)</span>
+                            <span>F_Ein (Stoßkugel)</span>
                         </div>
                         <div class="legend-item">
                             <span class="legend-dot dot-amber"></span>
-                            <span>F_Zentrum (Soliton)</span>
+                            <span>F_Mitte (Kettenmitte)</span>
                         </div>
                         <div class="legend-item">
                             <span class="legend-dot dot-red"></span>
-                            <span>F_Sensorwand (Transmittiert)</span>
+                            <span>F_Wand</span>
                         </div>
                     </div>
                 </div>
@@ -109,23 +109,27 @@
                 <div class="metrics-strip">
                     <div class="metric-pill">
                         <span class="metric-label">Spitzenkraft Ein</span>
-                        <span id="val-peak-in" class="metric-value font-mono">0.0 N</span>
+                        <span id="val-peak-in" class="metric-value font-mono">0 N</span>
                     </div>
                     <div class="metric-pill">
                         <span class="metric-label">Spitzenkraft Wand</span>
-                        <span id="val-peak-out" class="metric-value font-mono" style="color: var(--accent-crimson);">0.0 N</span>
+                        <span id="val-peak-out" class="metric-value font-mono" style="color: var(--accent-crimson);">0 N</span>
                     </div>
                     <div class="metric-pill">
-                        <span class="metric-label">Dämpfung &eta;</span>
-                        <span id="val-mitigation" class="metric-value font-mono text-emerald-400">0.0 %</span>
+                        <span class="metric-label">F_Wand / F_Ein</span>
+                        <span id="val-ratio" class="metric-value font-mono">–</span>
                     </div>
                     <div class="metric-pill">
-                        <span class="metric-label">Kinetische Energie</span>
+                        <span class="metric-label">E kinetisch</span>
                         <span id="val-kin-energy" class="metric-value font-mono">0.0 mJ</span>
                     </div>
                     <div class="metric-pill">
-                        <span class="metric-label">Verformungsenergie</span>
+                        <span class="metric-label">E elastisch</span>
                         <span id="val-pot-energy" class="metric-value font-mono">0.0 mJ</span>
+                    </div>
+                    <div class="metric-pill">
+                        <span class="metric-label">Simulationszeit</span>
+                        <span id="val-sim-time" class="metric-value font-mono">0 µs</span>
                     </div>
                     <div class="metric-pill">
                         <span class="metric-label">Phasenstatus</span>
@@ -149,41 +153,42 @@
                 <div class="preset-grid">
                     <button class="preset-btn active" data-preset="monodisperse">
                         <span>1. Homogene Kette</span>
-                        <span class="font-mono text-xs" style="color: var(--accent-cyan);">Soliton</span>
+                        <span class="font-mono text-xs" style="color: var(--accent-cyan);">&times; 1,64</span>
                     </button>
                     <button class="preset-btn" data-preset="tapered">
-                        <span>2. Verjüngte Kette (Tapered)</span>
-                        <span class="font-mono text-xs" style="color: var(--accent-emerald);">&eta; &gt; 70%</span>
+                        <span>2. Verjüngte Kette</span>
+                        <span class="font-mono text-xs" style="color: var(--accent-emerald);">&times; 0,92</span>
                     </button>
                     <button class="preset-btn" data-preset="diode">
-                        <span>3. Akustische Diode</span>
-                        <span class="font-mono text-xs" style="color: var(--accent-amber);">1-Way</span>
+                        <span>3. Gestufte Kette</span>
+                        <span class="font-mono text-xs" style="color: var(--accent-amber);">&times; 0,93 / 2,43</span>
                     </button>
                     <button class="preset-btn" data-preset="diatomic">
-                        <span>4. Diatomisches Gitter</span>
-                        <span class="font-mono text-xs" style="color: #c084fc;">Bandgap</span>
+                        <span>4. Diatomische Kette</span>
+                        <span class="font-mono text-xs" style="color: #c084fc;">&times; 0,51</span>
                     </button>
                     <button class="preset-btn" data-preset="defect">
-                        <span>5. Elastomer-Störstelle</span>
-                        <span class="font-mono text-xs" style="color: #f43f5e;">Dämpfung</span>
+                        <span>5. PTFE-Störstelle</span>
+                        <span class="font-mono text-xs" style="color: #f43f5e;">&times; 0,47</span>
                     </button>
                     <button class="preset-btn" data-preset="newton">
                         <span>6. Newtons Wiege</span>
-                        <span class="font-mono text-xs" style="color: #94a3b8;">Freies Ende</span>
+                        <span class="font-mono text-xs" style="color: #94a3b8;">ohne Wand</span>
                     </button>
                 </div>
+                <p style="font-size: 0.7rem; color: var(--text-dim); margin-top: -0.4rem;">Rechts: F_Wand / F_Ein aus der Simulation, gilt für jede Stoßgeschwindigkeit.</p>
 
-                <!-- Diode Reverse Direction Toggle (visible only on diode preset) -->
+                <!-- Diode Reverse Direction Toggle (visible only on the stepped chain) -->
                 <div id="diode-reverse-container" style="display: none; align-items: center; justify-content: space-between; background: rgba(3,7,18,0.5); padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-subtle);">
                     <span style="font-size: 0.75rem; color: var(--text-muted);">Stoßrichtung umkehren:</span>
                     <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.75rem;">
                         <input type="checkbox" id="diode-reverse-toggle" style="cursor: pointer;">
-                        <span>Rechts nach Links</span>
+                        <span>klein nach groß</span>
                     </label>
                 </div>
 
                 <div id="preset-description" class="preset-info-box">
-                    <strong>Homogene Kette (Nesterenko-Soliton):</strong> 12 identische Wälzlager-Stahlkugeln. Ein einzelner, kompakter Solitonenpuls wandert ohne dispersive Verbreiterung durch das unkomprimierte Gitter ("Sonic Vacuum").
+                    <strong>Homogene Kette:</strong> 12 Stahlkugeln Ø 20 mm, berührend, ohne Vorspannung ("Sonic Vacuum"). Aus dem Stoß entsteht eine Solitärwelle von rund 5 Kugeldurchmessern Breite, die ohne Abklingen durch die Kette läuft (bei 5 m/s mit rund 940 m/s). An der starren Wand wird sie reflektiert, dort wirkt das 1,64-Fache der Eingangskraft.
                 </div>
             </section>
 
@@ -196,7 +201,7 @@
 
                 <div class="slider-group">
                     <div class="slider-label">
-                        <span>Projektil-Geschwindigkeit (v<sub>0</sub>):</span>
+                        <span>Stoßkugel Ø 20 mm, Stahl, v<sub>0</sub>:</span>
                         <span id="striker-speed-val" class="slider-val">5.0 m/s</span>
                     </div>
                     <input type="range" id="striker-speed" min="1.0" max="10.0" step="0.2" value="5.0">
@@ -220,11 +225,12 @@
                     <span>Zeitlupe &amp; Simulationstempo</span>
                 </div>
 
+                <p style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: -0.4rem;">Simulierte Zeit je Sekunde Echtzeit. Die Welle braucht je nach Kette und v<sub>0</sub> 0,2 bis 0,8 ms bis zur Wand.</p>
                 <div class="slowmo-strip">
-                    <button class="slowmo-btn" data-scale="1.0">1.0x</button>
-                    <button class="slowmo-btn" data-scale="0.5">0.5x</button>
-                    <button class="slowmo-btn active" data-scale="0.2">0.2x</button>
-                    <button class="slowmo-btn" data-scale="0.05">0.05x</button>
+                    <button class="slowmo-btn" data-scale="1e-2">10 ms</button>
+                    <button class="slowmo-btn" data-scale="1e-3">1 ms</button>
+                    <button class="slowmo-btn active" data-scale="1e-4">100 µs</button>
+                    <button class="slowmo-btn" data-scale="1e-5">10 µs</button>
                 </div>
 
                 <div style="display: flex; gap: 0.5rem;">
@@ -243,26 +249,28 @@
             <details class="theory-box">
                 <summary>
                     <i class="ph-bold ph-book-open" style="margin-right: 0.35rem;"></i>
-                    Theoretische Grundlagen (Hertz &amp; Nesterenko)
+                    Grundlagen und Modell (Hertz &amp; Nesterenko)
                 </summary>
                 <div style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
                     <p>
                         <strong>1. Hertzsches Kontaktgesetz:</strong><br>
-                        Zwischen zwei elastischen Sphären gilt unter Kompression (&delta; &gt; 0):
+                        Zwischen zwei elastischen Kugeln gilt unter Druck (&delta; &gt; 0):
                         <br>
-                        <code style="font-family: var(--font-mono); color: var(--accent-amber);">F = A &middot; &delta;^(3/2)</code>
+                        <code style="font-family: var(--font-mono); color: var(--accent-amber);">F = A &middot; &delta;^(3/2),  A = 4/3 &middot; E* &middot; &radic;R*</code>
                         <br>
-                        Da keine Zugspannungen übertragen werden (&delta; &le; 0 &rArr; F = 0), ist die lineare Schallgeschwindigkeit im unkomprimierten Ruhezustand exakt null (<em>Sonic Vacuum</em>).
+                        Zug wird nicht übertragen (&delta; &le; 0 &rArr; F = 0). Ohne Vorspannung ist die lineare Schallgeschwindigkeit deshalb null (<em>Sonic Vacuum</em>).
                     </p>
                     <p>
-                        <strong>2. Nesterenko-Soliton (HNSW):</strong><br>
-                        Ein Stoß formiert sich zu einem kompakten Solitonenpaket mit Breite von ca. 5 Kugelradien. Die Ausbreitungsgeschwindigkeit skaliert mit der Schockamplitude:
+                        <strong>2. Solitärwelle (Nesterenko):</strong><br>
+                        Ein Stoß formt eine Welle von rund 5 Kugeldurchmessern Breite. Ihre Geschwindigkeit wächst mit der Kraftamplitude:
                         <br>
                         <code style="font-family: var(--font-mono); color: var(--accent-cyan);">V_s &prop; F_max^(1/6)</code>
+                        <br>
+                        Bei 5 m/s Stoßgeschwindigkeit läuft sie in Stahl mit rund 940 m/s, die Näherung von Nesterenko ergibt 929 m/s.
                     </p>
                     <p>
-                        <strong>3. Schockabsorption in verjüngten Ketten:</strong><br>
-                        Durch einen Massengradienten (groß &rarr; klein) wird die Solitonenwelle an jeder Grenzfläche partiell reflektiert und in hochfrequente Eigenschwingungen zerlegt (<em>Kinetic Energy Trapping</em>).
+                        <strong>3. Modell und Prüfung:</strong><br>
+                        SI-Einheiten, Werkstoff-Richtwerte: Stahl E = 210 GPa, &nu; = 0,30, &rho; = 7850 kg/m³; Wolframkarbid 600 GPa, 0,22, 15 000 kg/m³; Aluminium 70 GPa, 0,33, 2700 kg/m³; PTFE 1,46 GPa, 0,46, 2200 kg/m³. Die Wand ist starr, das Modell hat keine Dämpfung, die Gesamtenergie bleibt erhalten. Weil das Hertz-Gesetz skaliert, hängen die Kraftverhältnisse nicht von v<sub>0</sub> ab. Der Flug der Stoßkugel bis 1 mm vor die Kette wird übersprungen. <code style="font-family: var(--font-mono);">tests/verify.mjs</code> prüft Stoßkraft und Kontaktzeit gegen die Hertz-Lösung, die Wellengeschwindigkeit gegen Nesterenko und die Energieerhaltung.
                     </p>
                 </div>
             </details>
