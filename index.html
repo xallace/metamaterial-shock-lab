@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Granular Metamaterial Shock Lab — 3D Solitary Waves & Impulse Mitigation</title>
+    
+    <!-- Meta & Social -->
+    <meta name="description" content="Interaktive 3D-Simulation nichtlinearer Hertzscher Solitonen (HNSWs), Impulsdämpfung in verjüngten Granularketten und akustischer Diodenwirkung.">
+    <meta name="author" content="Walter (@xallace)">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Three.js & OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Header Navigation -->
+    <header id="app-header">
+        <div class="header-container">
+            <div class="header-left">
+                <a href="https://xallace.github.io/" class="back-link" title="Zurück zum Portfolio">
+                    <i class="ph-bold ph-arrow-left"></i>
+                </a>
+                <div class="app-title-group">
+                    <h1>
+                        <span>GRANULAR METAMATERIAL SHOCK LAB</span>
+                        <span class="badge-live">
+                            <span class="pulse-dot"></span>
+                            3D PBR · Verlet Integrator
+                        </span>
+                    </h1>
+                    <p>Nichtlineare Hertzsche Solitonen (HNSWs) &amp; Impulsdämpfung in 1D-Granularkristallen</p>
+                </div>
+            </div>
+
+            <div class="header-actions">
+                <a href="https://github.com/xallace/metamaterial-shock-lab" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.75rem;">
+                    <i class="ph-bold ph-github-logo"></i>
+                    <span>Source Code</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="main-workspace">
+        
+        <!-- Left: 3D Viewport & Real-time Oscilloscope -->
+        <div class="viewport-wrapper">
+            
+            <!-- 3D Viewport Card -->
+            <div class="viewport-card glass-panel">
+                <div class="viewport-hint">
+                    <i class="ph-fill ph-hand-pointing text-cyan-400"></i>
+                    <span>Tipp: Ziehe das linke Projektil mit der Maus zurück oder rotiere die Kamera frei</span>
+                </div>
+
+                <div class="camera-controls-overlay">
+                    <button id="cam-iso" class="cam-btn" title="Isometrische Ansicht">Iso</button>
+                    <button id="cam-front" class="cam-btn" title="Frontalansicht">Front</button>
+                    <button id="cam-top" class="cam-btn" title="Draufsicht">Top</button>
+                </div>
+
+                <div id="viewport-3d"></div>
+            </div>
+
+            <!-- Real-time Oscilloscope & Force Telemetry -->
+            <div class="oscilloscope-panel glass-panel">
+                <div class="panel-header">
+                    <div class="panel-title">
+                        <i class="ph-bold ph-wave-sine" style="color: var(--accent-cyan);"></i>
+                        <span>Echtzeit-Oszilloskop (Kontaktkräfte &amp; Schockübertragung)</span>
+                    </div>
+
+                    <div class="osc-legend">
+                        <div class="legend-item">
+                            <span class="legend-dot dot-cyan"></span>
+                            <span>F_Eingang (Projektil)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-dot dot-amber"></span>
+                            <span>F_Zentrum (Soliton)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-dot dot-red"></span>
+                            <span>F_Sensorwand (Transmittiert)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Canvas Curve Plot -->
+                <div class="osc-canvas-wrapper">
+                    <canvas id="oscilloscope-canvas"></canvas>
+                </div>
+
+                <!-- Live Diagnostic Metrics Strip -->
+                <div class="metrics-strip">
+                    <div class="metric-pill">
+                        <span class="metric-label">Spitzenkraft Ein</span>
+                        <span id="val-peak-in" class="metric-value font-mono">0.0 N</span>
+                    </div>
+                    <div class="metric-pill">
+                        <span class="metric-label">Spitzenkraft Wand</span>
+                        <span id="val-peak-out" class="metric-value font-mono" style="color: var(--accent-crimson);">0.0 N</span>
+                    </div>
+                    <div class="metric-pill">
+                        <span class="metric-label">Dämpfung &eta;</span>
+                        <span id="val-mitigation" class="metric-value font-mono text-emerald-400">0.0 %</span>
+                    </div>
+                    <div class="metric-pill">
+                        <span class="metric-label">Kinetische Energie</span>
+                        <span id="val-kin-energy" class="metric-value font-mono">0.0 mJ</span>
+                    </div>
+                    <div class="metric-pill">
+                        <span class="metric-label">Verformungsenergie</span>
+                        <span id="val-pot-energy" class="metric-value font-mono">0.0 mJ</span>
+                    </div>
+                    <div class="metric-pill">
+                        <span class="metric-label">Phasenstatus</span>
+                        <span id="val-soliton-status" class="metric-value" style="font-size: 0.8rem;">RUHEZUSTAND</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right: Control Sidebar -->
+        <aside class="controls-sidebar">
+
+            <!-- Presets Section -->
+            <section class="control-section glass-panel">
+                <div class="section-heading">
+                    <i class="ph-bold ph-squares-four"></i>
+                    <span>Gitter-Architektur (Presets)</span>
+                </div>
+
+                <div class="preset-grid">
+                    <button class="preset-btn active" data-preset="monodisperse">
+                        <span>1. Homogene Kette</span>
+                        <span class="font-mono text-xs" style="color: var(--accent-cyan);">Soliton</span>
+                    </button>
+                    <button class="preset-btn" data-preset="tapered">
+                        <span>2. Verjüngte Kette (Tapered)</span>
+                        <span class="font-mono text-xs" style="color: var(--accent-emerald);">&eta; &gt; 70%</span>
+                    </button>
+                    <button class="preset-btn" data-preset="diode">
+                        <span>3. Akustische Diode</span>
+                        <span class="font-mono text-xs" style="color: var(--accent-amber);">1-Way</span>
+                    </button>
+                    <button class="preset-btn" data-preset="diatomic">
+                        <span>4. Diatomisches Gitter</span>
+                        <span class="font-mono text-xs" style="color: #c084fc;">Bandgap</span>
+                    </button>
+                    <button class="preset-btn" data-preset="defect">
+                        <span>5. Elastomer-Störstelle</span>
+                        <span class="font-mono text-xs" style="color: #f43f5e;">Dämpfung</span>
+                    </button>
+                    <button class="preset-btn" data-preset="newton">
+                        <span>6. Newtons Wiege</span>
+                        <span class="font-mono text-xs" style="color: #94a3b8;">Freies Ende</span>
+                    </button>
+                </div>
+
+                <!-- Diode Reverse Direction Toggle (visible only on diode preset) -->
+                <div id="diode-reverse-container" style="display: none; align-items: center; justify-content: space-between; background: rgba(3,7,18,0.5); padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-subtle);">
+                    <span style="font-size: 0.75rem; color: var(--text-muted);">Stoßrichtung umkehren:</span>
+                    <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.75rem;">
+                        <input type="checkbox" id="diode-reverse-toggle" style="cursor: pointer;">
+                        <span>Rechts nach Links</span>
+                    </label>
+                </div>
+
+                <div id="preset-description" class="preset-info-box">
+                    <strong>Homogene Kette (Nesterenko-Soliton):</strong> 12 identische Wälzlager-Stahlkugeln. Ein einzelner, kompakter Solitonenpuls wandert ohne dispersive Verbreiterung durch das unkomprimierte Gitter ("Sonic Vacuum").
+                </div>
+            </section>
+
+            <!-- Dynamic Striker & Impulse Controls -->
+            <section class="control-section glass-panel">
+                <div class="section-heading">
+                    <i class="ph-bold ph-target"></i>
+                    <span>Impuls- &amp; Projektilsteuerung</span>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Projektil-Geschwindigkeit (v<sub>0</sub>):</span>
+                        <span id="striker-speed-val" class="slider-val">5.0 m/s</span>
+                    </div>
+                    <input type="range" id="striker-speed" min="1.0" max="10.0" step="0.2" value="5.0">
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem;">
+                    <button id="btn-fire" class="btn-primary" style="flex: 1;">
+                        <i class="ph-bold ph-lightning"></i>
+                        <span>Stoß auslösen</span>
+                    </button>
+                    <button id="btn-reset" class="btn-secondary" title="Zurücksetzen">
+                        <i class="ph-bold ph-arrow-counter-clockwise"></i>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Simulation Speed & Time Controls -->
+            <section class="control-section glass-panel">
+                <div class="section-heading">
+                    <i class="ph-bold ph-clock"></i>
+                    <span>Zeitlupe &amp; Simulationstempo</span>
+                </div>
+
+                <div class="slowmo-strip">
+                    <button class="slowmo-btn" data-scale="1.0">1.0x</button>
+                    <button class="slowmo-btn" data-scale="0.5">0.5x</button>
+                    <button class="slowmo-btn active" data-scale="0.2">0.2x</button>
+                    <button class="slowmo-btn" data-scale="0.05">0.05x</button>
+                </div>
+
+                <div style="display: flex; gap: 0.5rem;">
+                    <button id="btn-play-pause" class="btn-secondary" style="flex: 1;">
+                        <i class="ph-bold ph-pause"></i>
+                        <span>Pause</span>
+                    </button>
+                    <button id="btn-step" class="btn-secondary" style="flex: 1;">
+                        <i class="ph-bold ph-step-forward"></i>
+                        <span>Einzelschritt</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Theoretical Foundations Accordion -->
+            <details class="theory-box">
+                <summary>
+                    <i class="ph-bold ph-book-open" style="margin-right: 0.35rem;"></i>
+                    Theoretische Grundlagen (Hertz &amp; Nesterenko)
+                </summary>
+                <div style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                    <p>
+                        <strong>1. Hertzsches Kontaktgesetz:</strong><br>
+                        Zwischen zwei elastischen Sphären gilt unter Kompression (&delta; &gt; 0):
+                        <br>
+                        <code style="font-family: var(--font-mono); color: var(--accent-amber);">F = A &middot; &delta;^(3/2)</code>
+                        <br>
+                        Da keine Zugspannungen übertragen werden (&delta; &le; 0 &rArr; F = 0), ist die lineare Schallgeschwindigkeit im unkomprimierten Ruhezustand exakt null (<em>Sonic Vacuum</em>).
+                    </p>
+                    <p>
+                        <strong>2. Nesterenko-Soliton (HNSW):</strong><br>
+                        Ein Stoß formiert sich zu einem kompakten Solitonenpaket mit Breite von ca. 5 Kugelradien. Die Ausbreitungsgeschwindigkeit skaliert mit der Schockamplitude:
+                        <br>
+                        <code style="font-family: var(--font-mono); color: var(--accent-cyan);">V_s &prop; F_max^(1/6)</code>
+                    </p>
+                    <p>
+                        <strong>3. Schockabsorption in verjüngten Ketten:</strong><br>
+                        Durch einen Massengradienten (groß &rarr; klein) wird die Solitonenwelle an jeder Grenzfläche partiell reflektiert und in hochfrequente Eigenschwingungen zerlegt (<em>Kinetic Energy Trapping</em>).
+                    </p>
+                </div>
+            </details>
+
+        </aside>
+
+    </main>
+
+    <!-- Application Logic -->
+    <script src="physics.js"></script>
+    <script src="scene3d.js"></script>
+    <script src="app.js"></script>
+
+</body>
+</html>
